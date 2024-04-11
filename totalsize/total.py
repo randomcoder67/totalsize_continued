@@ -405,6 +405,7 @@ def cli():
     parser.add_argument(
     	"--cookies-from-browser",
     	type=str,
+    	metavar="BROWSER",
     	help="Browser to extract and use cookies from",
     )
     parser.add_argument(

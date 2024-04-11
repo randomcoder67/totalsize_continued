@@ -2,9 +2,10 @@
 
 I use this script quite a lot, and I notied the original has been archived, so I decided to fork it and add some stuff.
 
-Added so far:
+Added so far:  
 	* --cookies-from-browser option
-Planned:
+
+Planned:  
 	* Multithreading
 	* Ability to input multiple URLs
 
