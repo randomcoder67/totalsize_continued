@@ -119,10 +119,12 @@ FAKE_ENTRY = Entry(None, "fake", False, None, None, None, None, None)
 
 
 class Playlist:
-    def __init__(self, url, format_sel, retries=0, cookies_path=None):
+    def __init__(self, url, format_sel, retries=0, cookies_path=None, cookies_from_browser=None):
         opts = YTDL_OPTS
         if cookies_path:
             opts["cookiefile"] = str(cookies_path)
+        elif cookies_from_browser:
+        	opts["cookiesfrombrowser"] = (cookies_from_browser,)
         self._retries = retries
         self._ydl = yt_dlp.YoutubeDL(opts)
         TEMPPATH.parent.mkdir(exist_ok=True)
@@ -401,6 +403,11 @@ def cli():
         "-n", "--no-progress", action="store_true", help="Do not display progress count during processing."
     )
     parser.add_argument(
+    	"--cookies-from-browser",
+    	type=str,
+    	help="Browser to extract and use cookies from",
+    )
+    parser.add_argument(
         "-r",
         "--retries",
         metavar="NUM",
@@ -435,7 +442,7 @@ def cli():
             cookies_path = Path(args.cookies)
             validate_cookiefile(cookies_path)
 
-        playlist = Playlist(args.url, args.format_filter, retries=args.retries, cookies_path=cookies_path)
+        playlist = Playlist(args.url, args.format_filter, retries=args.retries, cookies_path=cookies_path, cookies_from_browser=args.cookies_from_browser)
         if sel_raw_opts:
             print_raw_data(playlist, sel_raw_opts)
         else:

@@ -1,3 +1,13 @@
+# totalsize continuted
+
+I use this script quite a lot, and I notied the original has been archived, so I decided to fork it and add some stuff.
+
+Added so far:
+	* --cookies-from-browser option
+Planned:
+	* Multithreading
+	* Ability to input multiple URLs
+
 # totalsize
 Script that uses yt-dlp to calculate total size of all videos in a playlist (also works with single videos).
 # Installation
