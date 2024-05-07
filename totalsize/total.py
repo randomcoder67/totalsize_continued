@@ -401,7 +401,7 @@ def print_report(playlist, more_info=False, no_progress=False):
         for processed in playlist.gen_info():
             processed_media += processed
             if not no_progress:
-                print(f"Processed {processed_media} mediafile{'s' if processed_media != 1 else ''}", end="\r")
+                print(f"Processed {processed_media} mediafile{'s' if processed_media != 1 else ''}", end="\n")
     except KeyboardInterrupt:
         interupted = True
 
