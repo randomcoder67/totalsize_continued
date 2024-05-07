@@ -7,6 +7,7 @@ import re
 import tempfile
 import time
 from pathlib import Path
+from itertools import chain
 
 import yt_dlp
 from prettytable import PrettyTable, SINGLE_BORDER
@@ -15,7 +16,7 @@ from yt_dlp.utils import DownloadError, ExtractorError, UnsupportedError
 DEFAULT_FORMAT = "bestvideo*+bestaudio/best"
 FORMAT_DOC_URL = "https://github.com/yt-dlp/yt-dlp#format-selection"
 FRAGMENTS_REGEX = re.compile(r"range/[\d]+-([\d]+)$")
-TEMPPATH = Path(tempfile.gettempdir(), "totalsize", "fragment")
+TEMPPATH = Path(tempfile.gettempdir(), "totalsize", "fragment_AAA")
 TIMEOUT = 30
 YTDL_OPTS = {
     "quiet": True,
@@ -24,6 +25,7 @@ YTDL_OPTS = {
     "socket_timeout": TIMEOUT,
 }
 DEFAULT_RETRIES = 10
+DEFAULT_THREAD_COUNT = 2
 MULT_NAMES_BTS = ("B", "KB", "MB", "GB", "TB", "PB")
 MULT_NAMES_DEC = ("", "K", "M", "B")
 RAW_OPTS = ("media", "size", "duration", "views", "likes", "dislikes", "percentage")
@@ -119,29 +121,38 @@ FAKE_ENTRY = Entry(None, "fake", False, None, None, None, None, None)
 
 
 class Playlist:
-    def __init__(self, url, format_sel, retries=0, cookies_path=None, cookies_from_browser=None):
-        opts = YTDL_OPTS
+    def __init__(self, urls, format_sel, retries=0, cookies_path=None, cookies_from_browser=None, num_threads=None):
+        if num_threads:
+            self.num_threads = num_threads
+        else:
+            self.num_threads = DEFAULT_THREAD_COUNT
+        self.opts = YTDL_OPTS
+        #print(self.opts)
+        #print(type(self.opts["outtmpl"]))
         if cookies_path:
-            opts["cookiefile"] = str(cookies_path)
+            self.opts["cookiefile"] = str(cookies_path)
         elif cookies_from_browser:
-        	opts["cookiesfrombrowser"] = (cookies_from_browser,)
+            self.opts["cookiesfrombrowser"] = (cookies_from_browser,)
         self._retries = retries
-        self._ydl = yt_dlp.YoutubeDL(opts)
+        self._ydl = yt_dlp.YoutubeDL(self.opts)
         TEMPPATH.parent.mkdir(exist_ok=True)
 
+
+        self._medias = []
         try:
             self._selector = self._ydl.build_format_selector(format_sel)
         except ValueError:
             raise TotalsizeError("Invalid format filter")
 
-        try:
-            preinfo = self._ydl.extract_info(url, process=False)
-            if preinfo.get("ie_key"):
-                preinfo = self._ydl.extract_info(preinfo["url"], process=False)
-        except (DownloadError, UnsupportedError):
-            raise TotalsizeError("Resource not found")
+        for url in urls:
+            try:
+                preinfo = self._ydl.extract_info(url, process=False)
+                if preinfo.get("ie_key"):
+                    preinfo = self._ydl.extract_info(preinfo["url"], process=False)
+            except (DownloadError, UnsupportedError):
+                raise TotalsizeError("Resource not found")
 
-        self._medias = preinfo.get("entries") or [preinfo]
+            self._medias = chain(self._medias, (preinfo.get("entries") or [preinfo]))
         self.entries = []
 
     @property
@@ -177,7 +188,11 @@ class Playlist:
             pass
 
     def gen_info(self):
-        for media in self._medias:
+        import threading
+        lock = threading.Lock()
+        
+        #print(next(self._medias))
+        def do_thing(media):
             attempt_retries = 0
             unsupported = False
             media_info = {}
@@ -185,9 +200,12 @@ class Playlist:
 
             while attempt_retries <= self._retries:
                 if attempt_retries > 0:
+                    #print(attempt_retries)
                     time.sleep(TIMEOUT)
                 try:
+                    #print("Starting:", self.num)
                     media_info = self._get_media_info(media)
+                    #print("Finished:", self.num)
                     inaccurate, size = self._get_size(media_info)
                 except UnsupportedError:
                     unsupported = True
@@ -204,7 +222,7 @@ class Playlist:
                     break
 
             if unsupported:
-                continue
+                return None
 
             info = {
                 "mid": media.get("id"),
@@ -216,11 +234,51 @@ class Playlist:
                 "likes": media_info.get("like_count"),
                 "dislikes": media_info.get("dislike_count"),
             }
-            self.entries.append(Entry(**info))
-            yield 1
+            
+            return info
+        
+        self.num = 0
+        def a_thread():
+            while True:
+                with lock:
+                    self.num += 1
+                    media = next(self._medias, None)
+                    if not media:
+                        #print("Done")
+                        break
+                info = do_thing(media)
+                if info != None:
+                    with lock:
+                        self.entries.append(Entry(**info))
+        
+        threads = []
+        for _ in range(self.num_threads):
+            thread = threading.Thread(target=a_thread)
+            thread.start()
+            threads.append(thread)
+        
+        numDone = 0
+        while True:
+            #print("Active:", threading.active_count())
+            if threading.active_count() == 1:
+                for thread in threads:
+                    thread.join()
+                break
+            time.sleep(0.2)
+            doneNow = len(self.entries)
+            numJustDone = doneNow - numDone
+            for _ in range(numJustDone):
+                yield 1
+            numDone = doneNow
 
     def _get_media_info(self, media):
-        return self._ydl.process_ie_result(media, download=False)
+        import random
+        ri = random.randint(0, 1000)
+        opts = self.opts.copy()
+        opts["outtmpl"] = str(TEMPPATH).replace("AAA", str(ri))
+        ydl = yt_dlp.YoutubeDL(self.opts)
+        
+        return ydl.process_ie_result(media, download=False)
 
     def _get_size(self, media_info):
         try:
@@ -270,6 +328,9 @@ class Playlist:
                 return (False, None)
         return (inaccurate, media_sum)
 
+def validate_browser(browser):
+    if not browser in ["firefox", "chrome", "brave", "chromium", "edge", "opera", "safari", "vivaldi"]:
+        raise TotalsizeError("Unknown browser")
 
 def validate_cookiefile(cookies_path):
     if not cookies_path.is_file():
@@ -336,6 +397,7 @@ def print_report(playlist, more_info=False, no_progress=False):
     totals_table = gen_empty_table(total_fields)
 
     try:
+    
         for processed in playlist.gen_info():
             processed_media += processed
             if not no_progress:
@@ -388,7 +450,7 @@ def print_raw_data(playlist, raw_opts):
 
 def cli():
     parser = argparse.ArgumentParser(description="Calculate total size of media playlist contents.")
-    parser.add_argument("url", metavar="URL", type=str, help="playlist/media url")
+    parser.add_argument("urls", metavar="URL", type=str, help="playlist/media urls", nargs='+')
     parser.add_argument(
         "-f",
         "--format-filter",
@@ -403,10 +465,10 @@ def cli():
         "-n", "--no-progress", action="store_true", help="Do not display progress count during processing."
     )
     parser.add_argument(
-    	"--cookies-from-browser",
-    	type=str,
-    	metavar="BROWSER",
-    	help="Browser to extract and use cookies from",
+        "--cookies-from-browser",
+        type=str,
+        metavar="BROWSER",
+        help="Browser to extract and use cookies from",
     )
     parser.add_argument(
         "-r",
@@ -416,6 +478,7 @@ def cli():
         default=DEFAULT_RETRIES,
         help="Max number of connection retries. The default is {}.".format(DEFAULT_RETRIES),
     )
+    parser.add_argument("-t", "--threads", metavar="FILE", type=int, help="Number of threads to use (default 2)")
     parser.add_argument("-c", "--csv-file", metavar="FILE", type=str, help="Write data to csv file.")
     parser.add_argument("--media", action="store_true", help=SUPPRESS_TXT.format("media count"))
     parser.add_argument("--size", action="store_true", help=SUPPRESS_TXT.format("total size (bytes)"))
@@ -442,8 +505,11 @@ def cli():
         if args.cookies:
             cookies_path = Path(args.cookies)
             validate_cookiefile(cookies_path)
-
-        playlist = Playlist(args.url, args.format_filter, retries=args.retries, cookies_path=cookies_path, cookies_from_browser=args.cookies_from_browser)
+        
+        if args.cookies_from_browser:
+            validate_browser(args.cookies_from_browser)
+        print(args.urls)
+        playlist = Playlist(args.urls, args.format_filter, retries=args.retries, cookies_path=cookies_path, cookies_from_browser=args.cookies_from_browser, num_threads=args.threads)
         if sel_raw_opts:
             print_raw_data(playlist, sel_raw_opts)
         else:
